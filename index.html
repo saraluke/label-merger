@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Label Merger — Sara Luke Creative</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+  :root {
+    --navy: #394350;
+    --pink-light: #F3C4D6;
+    --pink-dark: #D56D85;
+    --green: #58634F;
+    --tan: #E49855;
+    --bg: #f9f6f3;
+    --text: #2a2a2a;
+    --border: #ddd;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+
+  header h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--navy);
+    letter-spacing: -0.02em;
+  }
+
+  header p {
+    margin-top: 6px;
+    font-size: 0.9rem;
+    color: #666;
+  }
+
+  .card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+    padding: 28px;
+    width: 100%;
+    max-width: 620px;
+  }
+
+  label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  textarea {
+    width: 100%;
+    height: 200px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 0.85rem;
+    font-family: ui-monospace, monospace;
+    color: var(--text);
+    resize: vertical;
+    line-height: 1.6;
+    transition: border-color 0.15s;
+  }
+
+  textarea:focus {
+    outline: none;
+    border-color: var(--pink-dark);
+  }
+
+  .hint {
+    font-size: 0.78rem;
+    color: #888;
+    margin-top: 6px;
+  }
+
+  button#mergeBtn {
+    display: block;
+    width: 100%;
+    margin-top: 20px;
+    padding: 14px;
+    background: var(--navy);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  button#mergeBtn:hover:not(:disabled) {
+    background: #2a323e;
+  }
+
+  button#mergeBtn:disabled {
+    background: #aaa;
+    cursor: not-allowed;
+  }
+
+  #status {
+    margin-top: 18px;
+    font-size: 0.88rem;
+    min-height: 24px;
+    text-align: center;
+  }
+
+  #status.error  { color: #c0392b; }
+  #status.success { color: var(--green); font-weight: 600; }
+  #status.working { color: var(--tan); }
+
+  .progress-bar-wrap {
+    margin-top: 12px;
+    background: #eee;
+    border-radius: 99px;
+    height: 6px;
+    overflow: hidden;
+    display: none;
+  }
+
+  .progress-bar {
+    height: 100%;
+    background: var(--pink-dark);
+    border-radius: 99px;
+    width: 0%;
+    transition: width 0.2s;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📦 Label Merger</h1>
+  <p>Paste ShipEngine label URLs — one per line — and download as a single PDF.</p>
+</header>
+
+<div class="card">
+  <label for="urls">Label URLs</label>
+  <textarea id="urls" placeholder="Paste URLs here, one per line.
+
+chrome-extension://efaidnbm.../https://api.shipengine.com/v1/downloads/...
+chrome-extension://efaidnbm.../https://api.shipengine.com/v1/downloads/..."></textarea>
+  <p class="hint">Chrome-extension:// prefixes are stripped automatically.</p>
+
+  <button id="mergeBtn">Merge &amp; Download PDF</button>
+
+  <div class="progress-bar-wrap" id="progressWrap">
+    <div class="progress-bar" id="progressBar"></div>
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<script>
+  var PROXY_URL = 'https://dropbox-pdf-proxy.sara-5fa.workers.dev/';
+
+  function cleanUrl(raw) {
+    raw = raw.trim();
+    // Strip chrome-extension://ID/ prefix wrapping the real URL
+    var match = raw.match(/chrome-extension:\/\/[^/]+\/(.+)/);
+    if (match) return match[1];
+    return raw;
+  }
+
+  async function fetchPdfViaProxy(url, index, total) {
+    setStatus('Downloading label ' + (index + 1) + ' of ' + total + '…', 'working');
+    setProgress((index / total) * 100);
+
+    var proxyUrl = PROXY_URL + '?url=' + encodeURIComponent(url);
+    var response = await fetch(proxyUrl);
+    if (!response.ok) throw new Error('Label ' + (index + 1) + ' failed: HTTP ' + response.status);
+    return await response.arrayBuffer();
+  }
+
+  async function merge() {
+    var raw = document.getElementById('urls').value.trim();
+    if (!raw) {
+      setStatus('Please paste at least one URL.', 'error');
+      return;
+    }
+
+    var lines = raw.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+    var urls = lines.map(cleanUrl).filter(function(u) { return u.startsWith('http'); });
+
+    if (urls.length === 0) {
+      setStatus('No valid URLs found. Make sure each line starts with http.', 'error');
+      return;
+    }
+
+    var btn = document.getElementById('mergeBtn');
+    btn.disabled = true;
+    document.getElementById('progressWrap').style.display = 'block';
+    setStatus('Starting download of ' + urls.length + ' label' + (urls.length > 1 ? 's' : '') + '…', 'working');
+
+    try {
+      var merged = await PDFLib.PDFDocument.create();
+
+      for (var i = 0; i < urls.length; i++) {
+        var bytes = await fetchPdfViaProxy(urls[i], i, urls.length);
+        var src = await PDFLib.PDFDocument.load(bytes);
+        var pages = await merged.copyPages(src, src.getPageIndices());
+        pages.forEach(function(p) { merged.addPage(p); });
+      }
+
+      setProgress(100);
+      setStatus('✓ Merged ' + urls.length + ' label' + (urls.length > 1 ? 's' : '') + '. Saving…', 'success');
+
+      var pdfBytes = await merged.save();
+      var blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+
+      var today = new Date().toISOString().slice(0, 10);
+      a.download = 'labels-' + today + '.pdf';
+      a.click();
+
+      setStatus('✓ Saved as labels-' + today + '.pdf', 'success');
+    } catch (err) {
+      setStatus('Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      setProgress(0);
+      setTimeout(function() {
+        document.getElementById('progressWrap').style.display = 'none';
+      }, 1500);
+    }
+  }
+
+  function setStatus(msg, cls) {
+    var el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = cls || '';
+  }
+
+  function setProgress(pct) {
+    document.getElementById('progressBar').style.width = pct + '%';
+  }
+
+  document.getElementById('mergeBtn').addEventListener('click', merge);
+</script>
+
+</body>
+</html>
